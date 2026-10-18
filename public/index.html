@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Spy — Word Game</title>
+<style>
+:root{--bg:#121214;--panel:#1e1e24;--line:#2d2d36;--text:#f4f4f6;--mute:#9a9aa8;--gold:#e6bf5a;--cyan:#4fd1e0;--red:#ff6b6b;--green:#5fd39a}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh;display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;max-width:560px;width:100%;margin:0 auto}
+h1{font-size:1.25rem;letter-spacing:.02em;font-weight:700}
+h1 span{color:var(--gold)}
+.chip{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:.85rem;color:var(--cyan);font-weight:600;letter-spacing:.12em}
+main{flex:1;width:100%;max-width:560px;margin:0 auto;padding:0 16px 24px;display:flex;flex-direction:column;gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+h2{font-size:1rem;margin-bottom:10px;font-weight:600}
+.mute{color:var(--mute);font-size:.9rem}
+input,select{width:100%;background:#16161b;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:12px;font:inherit;margin-bottom:10px;transition:border-color .2s}
+input:focus,select:focus{outline:none;border-color:var(--cyan)}
+button{font:inherit;font-weight:600;border:1px solid var(--line);background:#2a2a33;color:var(--text);border-radius:10px;padding:12px 16px;cursor:pointer;transition:transform .1s,background .2s,border-color .2s}
+button:hover{border-color:var(--cyan)}button:active{transform:scale(.98)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+button.p{background:var(--gold);color:#17140a;border-color:var(--gold)}
+button.c{background:var(--cyan);color:#06191c;border-color:var(--cyan)}
+button.ok{background:var(--green);color:#07180f;border-color:var(--green)}
+button.no{background:transparent;color:var(--red);border-color:var(--red)}
+button:disabled{opacity:.4;cursor:not-allowed}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.err{color:var(--red);font-size:.9rem;margin-top:4px}
+.role{text-align:center;padding:22px 16px;border-color:var(--cyan)}
+.role.spy{border-color:var(--red)}
+.role .big{font-size:2rem;font-weight:800;letter-spacing:.01em;margin:6px 0}
+.role.spy .big{color:var(--red)}.role:not(.spy) .big{color:var(--gold)}
+.role button{margin-top:10px;padding:6px 12px;font-size:.8rem}
+.plist{display:flex;flex-wrap:wrap;gap:8px}
+.pl{background:#16161b;border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:.9rem;display:flex;gap:6px;align-items:center}
+.pl.off{opacity:.45}.pl i{width:8px;height:8px;border-radius:50%;background:var(--green)}.pl.off i{background:var(--mute)}
+.pl.v{border-color:var(--green)}
+.badge{color:var(--gold);font-size:.75rem;font-weight:700}
+.q{border-left:3px solid var(--cyan);padding:6px 0 6px 12px;margin-bottom:12px}
+.q .a{color:var(--green);margin-top:2px}.q .w{color:var(--mute);font-style:italic}
+.pq{border:1px dashed var(--gold);border-radius:10px;padding:10px;margin-bottom:10px}
+.vote{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.vote button.sel{background:var(--red);border-color:var(--red);color:#1a0505}
+.banner{text-align:center;padding:24px 16px}
+.banner .big{font-size:1.8rem;font-weight:800;margin-bottom:6px}
+footer{text-align:center;padding:14px;color:var(--mute);font-size:.8rem}
+footer b{color:var(--gold);font-weight:600}
+.toast{animation:pop .35s ease}
+@keyframes pop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header><h1>Who's the <span>Spy?</span></h1><div id="chip"></div></header>
+<main id="app"></main>
+<footer>Designed &amp; Developed by <b>Mujtaba</b></footer>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const S = io();
+let st = null, err = '', reveal = true, voteSel = null;
+const drafts = {};
+const emit = (e, d) => S.emit(e, d);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const sess = () => { try { return JSON.parse(localStorage.getItem('spy-session')); } catch (e) { return null; } };
+
+function join(payload) {
+  S.emit('join', payload, r => {
+    if (r.error) {
+      err = r.error;
+      if (payload.token) { localStorage.removeItem('spy-session'); st = null; }
+      return render();
+    }
+    err = '';
+    localStorage.setItem('spy-session', JSON.stringify({ token: r.token, code: r.code }));
+  });
+}
+S.on('connect', () => { const s = sess(); if (s) join({ code: s.code, token: s.token }); });
+S.on('state', s => { if (!st || st.round !== s.round || st.phase !== s.phase) voteSel = null; st = s; render(); });
+
+document.addEventListener('input', e => { if (e.target.id) drafts[e.target.id] = e.target.value; });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || !e.target.dataset.enter) return;
+  e.preventDefault(); window[e.target.dataset.enter]();
+});
+
+function doJoin(create) {
+  const name = (drafts.name || '').trim();
+  const code = (drafts.code || '').trim();
+  if (!create && !code) { err = 'Enter the room code.'; return render(); }
+  join({ name, code, create });
+}
+const createRoom = () => doJoin(true);
+const joinRoom = () => doJoin(false);
+function leave() { localStorage.removeItem('spy-session'); st = null; location.reload(); }
+function ask() {
+  const q = (drafts.qText || '').trim(), to = drafts.qTo || document.getElementById('qTo')?.value;
+  if (!q || !to) return;
+  emit('ask', { to, q }); drafts.qText = ''; render();
+}
+function answer(id) {
+  const a = (drafts['ans' + id] || '').trim(); if (!a) return;
+  emit('answer', { id, a }); drafts['ans' + id] = '';
+}
+function guess() {
+  const w = (drafts.guess || '').trim(); if (!w) return;
+  if (confirm('Guess "' + w + '"? A wrong guess loses the game for the spy.')) { emit('guess', { word: w }); drafts.guess = ''; }
+}
+function castVote(id) { voteSel = id; emit('vote', { target: id }); render(); }
+function toggleReveal() { reveal = !reveal; render(); }
+
+const val = id => esc(drafts[id] || '');
+
+function viewJoin() {
+  const s = sess();
+  return `<div class="card toast"><h2>Join the game</h2>
+    <input id="name" placeholder="Your name" maxlength="16" value="${val('name')}" autocomplete="off" data-enter="joinRoom">
+    <input id="code" placeholder="Room code (e.g. KXPT)" maxlength="4" value="${val('code')}" autocapitalize="characters" autocomplete="off" data-enter="joinRoom">
+    <div class="row"><button class="p" onclick="createRoom()">Create room</button><button class="c" onclick="joinRoom()">Join room</button></div>
+    <div class="err">${esc(err)}</div>
+    <p class="mute" style="margin-top:12px">4 or more players on the same Wi-Fi. One player creates a room and shares the 4-letter code.</p>
+    ${s ? '<p class="mute" style="margin-top:8px">Reconnecting to your previous seat…</p>' : ''}</div>`;
+}
+
+function players() {
+  return `<div class="plist">${st.players.map(p => `<div class="pl ${p.on ? '' : 'off'} ${p.voted ? 'v' : ''}"><i></i>${esc(p.name)}${p.id === st.me ? ' (you)' : ''}${p.id === st.owner ? ' <span class="badge">HOST</span>' : ''}</div>`).join('')}</div>`;
+}
+
+function viewLobby() {
+  const isOwner = st.owner === st.me, n = st.players.filter(p => p.on).length;
+  return `<div class="card toast"><h2>Lobby</h2>
+    <p class="mute" style="margin-bottom:10px">Room code <b style="color:var(--cyan);letter-spacing:.15em;font-size:1.2rem">${st.code}</b> — share it with friends.</p>
+    ${players()}</div>
+    <div class="card">${isOwner
+      ? `<button class="p" style="width:100%" ${n < 4 ? 'disabled' : ''} onclick="emit('start')">Start round</button>
+         <p class="mute" style="margin-top:8px">${n < 4 ? `Need at least 4 players online (${n} now).` : `${n} players ready.`}</p>`
+      : '<p class="mute">Waiting for the host to start the round…</p>'}</div>`;
+}
+
+function roleCard() {
+  const r = st.role;
+  const body = !reveal ? '<div class="big">••••••</div><div class="mute">Your role is hidden</div>'
+    : r.spy ? `<div class="mute">Role</div><div class="big">YOU ARE THE SPY</div><div class="mute">Category hint: <b style="color:var(--text)">${esc(r.category)}</b>. Blend in and work out the word.</div>`
+    : `<div class="mute">Category: ${esc(r.category)}</div><div class="big">${esc(r.word)}</div><div class="mute">Find the spy without saying the word outright.</div>`;
+  return `<div class="card role ${r.spy && reveal ? 'spy' : ''}">${body}<br><button onclick="toggleReveal()">${reveal ? 'Hide' : 'Show'}</button></div>`;
+}
+
+function feed() {
+  const items = st.log.map(l => `<div class="q"><div><b>${esc(l.from)}</b> asks <b>${esc(l.to)}</b>: ${esc(l.q)}</div>
+    ${l.a !== null ? `<div class="a">${esc(l.to)}: ${esc(l.a)}</div>`
+      : l.toId === st.me ? `<div class="row" style="margin-top:6px"><input id="ans${l.id}" placeholder="Your answer" value="${val('ans' + l.id)}" style="margin:0"><button class="c" style="flex:0 0 auto" onclick="answer('${l.id}')">Answer</button></div>`
+      : '<div class="w">waiting for answer…</div>'}</div>`).join('');
+  return `<div class="card"><h2>Live questions</h2>${items || '<p class="mute">No approved questions yet.</p>'}</div>`;
+}
+
+function viewDiscussion() {
+  const isOwner = st.owner === st.me, isSpy = st.role.spy;
+  const others = st.players.filter(p => p.id !== st.me);
+  const sel = drafts.qTo && others.some(p => p.id === drafts.qTo) ? drafts.qTo : others[0].id;
+  drafts.qTo = sel;
+  let h = roleCard();
+  h += `<div class="card"><h2>Players</h2>${players()}</div>`;
+  if (isOwner) {
+    h += `<div class="card"><h2>Questions awaiting approval (${st.pending.length})</h2>${st.pending.map(q => `<div class="pq"><div><b>${esc(q.from)}</b> → <b>${esc(q.to)}</b></div><div style="margin:4px 0 8px">${esc(q.q)}</div>
+      <div class="row"><button class="ok" onclick="emit('approve',{id:'${q.id}'})">Allow / Send</button><button class="no" onclick="emit('reject',{id:'${q.id}'})">Reject</button></div></div>`).join('') || '<p class="mute">Nothing waiting. Your own questions are sent straight away.</p>'}</div>`;
+  }
+  h += `<div class="card"><h2>Ask a question</h2>
+    <select id="qTo">${others.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+    <input id="qText" maxlength="200" placeholder="${isOwner ? 'Your question' : 'Your question (the host approves it first)'}" value="${val('qText')}" data-enter="ask" autocomplete="off">
+    <button class="c" style="width:100%" onclick="ask()">${isOwner ? 'Send question' : 'Submit to host'}</button></div>`;
+  h += feed();
+  if (isSpy) h += guessCard();
+  if (isOwner) h += `<button class="p" onclick="if(confirm('Start the vote now?'))emit('startVote')">Start voting</button>`;
+  else h += '<p class="mute" style="text-align:center">The host starts the vote when discussion is over.</p>';
+  return h;
+}
+
+function guessCard() {
+  return `<div class="card" style="border-color:var(--red)"><h2>Spy: guess the word</h2>
+    <input id="guess" placeholder="Secret word" value="${val('guess')}" data-enter="guess" autocomplete="off">
+    <button class="no" style="width:100%" onclick="guess()">Submit guess</button>
+    <p class="mute" style="margin-top:6px">Right guess wins. Wrong guess loses.</p></div>`;
+}
+
+function viewVoting() {
+  const isOwner = st.owner === st.me;
+  const mine = voteSel;
+  const voted = st.players.filter(p => p.voted).length;
+  let h = roleCard();
+  h += `<div class="card"><h2>Vote for the spy</h2><div class="vote">${st.players.filter(p => p.id !== st.me).map(p => `<button class="${mine === p.id ? 'sel' : ''}" onclick="castVote('${p.id}')">${esc(p.name)}</button>`).join('')}</div>
+    <p class="mute" style="margin-top:10px">${voted} of ${st.players.filter(p => p.on).length} voted. You can change your vote until everyone has voted.</p></div>`;
+  h += feed();
+  if (st.role.spy) h += guessCard();
+  if (isOwner) h += `<button class="p" ${voted ? '' : 'disabled'} onclick="emit('endVote')">Reveal result now</button>`;
+  return h;
+}
+
+function viewResult() {
+  const r = st.result, spyWon = r.winner === 'spy', isOwner = st.owner === st.me;
+  const t = Object.entries(r.tally).map(([n, c]) => `${esc(n)}: ${c}`).join(' · ');
+  return `<div class="card banner toast" style="border-color:${spyWon ? 'var(--red)' : 'var(--green)'}">
+    <div class="big" style="color:${spyWon ? 'var(--red)' : 'var(--green)'}">${spyWon ? 'The spy wins' : 'Players win'}</div>
+    <p>${esc(r.reason)}</p></div>
+    <div class="card"><p>Spy: <b style="color:var(--red)">${esc(r.spy)}</b></p><p>Secret word: <b style="color:var(--gold)">${esc(r.word)}</b> <span class="mute">(${esc(r.category)})</span></p>
+    ${t ? `<p class="mute" style="margin-top:6px">Votes — ${t}</p>` : ''}</div>
+    <div class="card"><h2>Players</h2>${players()}</div>
+    ${isOwner ? `<button class="p" onclick="emit('start')">Next round</button>` : '<p class="mute" style="text-align:center">Waiting for the host to start the next round…</p>'}
+    <button onclick="leave()">Leave room</button>`;
+}
+
+function render() {
+  const a = document.activeElement, id = a && a.id, pos = a && a.selectionStart;
+  const app = document.getElementById('app');
+  document.getElementById('chip').innerHTML = st ? `<span class="chip">${st.code}</span>` : '';
+  if (!st) app.innerHTML = viewJoin();
+  else app.innerHTML = { lobby: viewLobby, discussion: viewDiscussion, voting: viewVoting, result: viewResult }[st.phase]();
+  if (id) { const e = document.getElementById(id); if (e) { e.focus(); try { e.setSelectionRange(pos, pos); } catch (x) {} } }
+}
+render();
+</script>
+</body>
+</html>
